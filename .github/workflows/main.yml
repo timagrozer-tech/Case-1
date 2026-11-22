@@ -1,0 +1,160 @@
+
+name: Build Golden Fortune APK
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Get files
+        uses: actions/checkout@v4
+
+      - name: Install Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: Install Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Install Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.10.2'
+
+      - name: Prepare game
+        shell: bash
+        run: |
+          set -e
+          mkdir -p extracted
+          found=0
+
+          while IFS= read -r -d '' file; do
+            if unzip -Z1 "$file" | grep -q 'index.html'; then
+              unzip -qo "$file" -d extracted
+              found=1
+              break
+            fi
+          done < <(find . -maxdepth 2 -name '*.zip' -print0)
+
+          if [ "$found" = 0 ]; then
+            echo "Game ZIP not found"
+            exit 1
+          fi
+
+          GAME=$(find extracted -name index.html -print -quit)
+          test -n "$GAME"
+
+          mkdir -p app/src/main/assets/www
+          cp -R "$(dirname "$GAME")/." app/src/main/assets/www/
+
+      - name: Create Android project
+        shell: bash
+        run: |
+          mkdir -p app/src/main/java/com/goldenfortune/game
+
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+            repositories {
+              google()
+              mavenCentral()
+              gradlePluginPortal()
+            }
+          }
+          dependencyResolutionManagement {
+            repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+            repositories {
+              google()
+              mavenCentral()
+            }
+          }
+          rootProject.name = 'GoldenFortune'
+          include ':app'
+          EOF
+
+          cat > build.gradle <<'EOF'
+          plugins {
+            id 'com.android.application' version '8.7.3' apply false
+          }
+          EOF
+
+          cat > app/build.gradle <<'EOF'
+          plugins {
+            id 'com.android.application'
+          }
+          android {
+            namespace 'com.goldenfortune.game'
+            compileSdk 35
+            defaultConfig {
+              applicationId 'com.goldenfortune.game'
+              minSdk 24
+              targetSdk 28
+              versionCode 25
+              versionName '25.0'
+            }
+          }
+          EOF
+
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+            <application
+              android:label="Golden Fortune"
+              android:theme="@android:style/Theme.Material.Light.NoActionBar">
+              <activity
+                android:name=".MainActivity"
+                android:exported="true">
+                <intent-filter>
+                  <action android:name="android.intent.action.MAIN"/>
+                  <category android:name="android.intent.category.LAUNCHER"/>
+                </intent-filter>
+              </activity>
+            </application>
+          </manifest>
+          EOF
+
+          cat > app/src/main/java/com/goldenfortune/game/MainActivity.java <<'EOF'
+          package com.goldenfortune.game;
+
+          import android.app.Activity;
+          import android.os.Bundle;
+          import android.webkit.WebView;
+          import android.webkit.WebViewClient;
+
+          public class MainActivity extends Activity {
+            WebView web;
+
+            @Override
+            public void onCreate(Bundle state) {
+              super.onCreate(state);
+              web = new WebView(this);
+              web.setWebViewClient(new WebViewClient());
+              web.getSettings().setJavaScriptEnabled(true);
+              web.getSettings().setDomStorageEnabled(true);
+              web.getSettings().setAllowFileAccess(true);
+              setContentView(web);
+              web.loadUrl("file:///android_asset/www/index.html");
+            }
+
+            @Override
+            public void onBackPressed() {
+              if (web.canGoBack()) {
+                web.goBack();
+              } else {
+                super.onBackPressed();
+              }
+            }
+          }
+          EOF
+
+      - name: Build APK
+        run: gradle :app:assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: Golden-Fortune-APK
+          path: app/build/outputs/apk/debug/app-debug.apk

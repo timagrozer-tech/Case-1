@@ -1,4 +1,3 @@
-
 name: Build Golden Fortune APK
 
 on:
@@ -31,28 +30,30 @@ jobs:
       - name: Prepare game
         shell: bash
         run: |
-          set -e
-          mkdir -p extracted
-          found=0
+          set -euo pipefail
 
-          while IFS= read -r -d '' file; do
-            if unzip -Z1 "$file" | grep -q 'index.html'; then
-              unzip -qo "$file" -d extracted
-              found=1
-              break
-            fi
-          done < <(find . -maxdepth 2 -name '*.zip' -print0)
+          ZIP="golden_fortune_30_browser.zip"
 
-          if [ "$found" = 0 ]; then
-            echo "Game ZIP not found"
+          if [ ! -f "$ZIP" ]; then
+            echo "Game archive not found: $ZIP"
             exit 1
           fi
 
-          GAME=$(find extracted -name index.html -print -quit)
-          test -n "$GAME"
+          mkdir -p extracted
+          unzip -qo "$ZIP" -d extracted
+
+          GAME=$(find extracted -type f -name index.html -print -quit)
+
+          if [ -z "$GAME" ]; then
+            echo "index.html not found"
+            exit 1
+          fi
 
           mkdir -p app/src/main/assets/www
           cp -R "$(dirname "$GAME")/." app/src/main/assets/www/
+
+          test -f app/src/main/assets/www/index.html
+          echo "Golden Fortune 30.0 ready"
 
       - name: Create Android project
         shell: bash
@@ -88,15 +89,17 @@ jobs:
           plugins {
             id 'com.android.application'
           }
+
           android {
             namespace 'com.goldenfortune.game'
             compileSdk 35
+
             defaultConfig {
               applicationId 'com.goldenfortune.game'
               minSdk 24
               targetSdk 28
-              versionCode 25
-              versionName '25.0'
+              versionCode 30
+              versionName '30.0'
             }
           }
           EOF
@@ -105,7 +108,8 @@ jobs:
           <manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <application
               android:label="Golden Fortune"
-              android:theme="@android:style/Theme.Material.Light.NoActionBar">
+              android:theme="@android:style/Theme.Material.Light.NoActionBar"
+              android:usesCleartextTraffic="false">
               <activity
                 android:name=".MainActivity"
                 android:exported="true">
@@ -127,17 +131,21 @@ jobs:
           import android.webkit.WebViewClient;
 
           public class MainActivity extends Activity {
-            WebView web;
+            private WebView web;
 
             @Override
             public void onCreate(Bundle state) {
               super.onCreate(state);
+
               web = new WebView(this);
               web.setWebViewClient(new WebViewClient());
+
               web.getSettings().setJavaScriptEnabled(true);
               web.getSettings().setDomStorageEnabled(true);
               web.getSettings().setAllowFileAccess(true);
+
               setContentView(web);
+
               web.loadUrl("file:///android_asset/www/index.html");
             }
 
@@ -149,6 +157,14 @@ jobs:
                 super.onBackPressed();
               }
             }
+
+            @Override
+            protected void onDestroy() {
+              if (web != null) {
+                web.destroy();
+              }
+              super.onDestroy();
+            }
           }
           EOF
 
@@ -158,5 +174,6 @@ jobs:
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
-          name: Golden-Fortune-APK
+          name: Golden-Fortune-30-APK
           path: app/build/outputs/apk/debug/app-debug.apk
+          if-no-files-found: error
